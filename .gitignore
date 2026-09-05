@@ -1,0 +1,9 @@
+# Holds the panel password hash and the session key.
+.env
+
+worker/dist
+worker/node_modules
+panel/node_modules
+panel/.next
+panel/next-env.d.ts
+*.tsbuildinfo

@@ -1,0 +1,16 @@
+# yt-dlp and the ffmpeg it needs to mux and transcode. Nothing else.
+#
+# Built here rather than pulled from someone else's registry: it is six lines, it is the only place
+# an untrusted binary could enter this stack, and rebuilding it is how yt-dlp gets updated —
+# `./deploy.sh update-fetcher`, which matters because sites change and yt-dlp follows them weekly.
+FROM docker.io/library/python:3.13-alpine
+
+RUN apk add --no-cache ffmpeg \
+ && pip install --no-cache-dir --upgrade yt-dlp
+
+# Runs as nobody: it fetches arbitrary URLs, and nothing it does needs privileges. The output
+# directory is bind-mounted world-writable by the worker for the same reason.
+USER nobody
+WORKDIR /out
+
+ENTRYPOINT []

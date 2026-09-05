@@ -1,0 +1,17 @@
+{
+  "name": "euronic-reel-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Queues downloads, runs yt-dlp in a container, and keeps what comes out.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "hash": "node dist/hash.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.7",
+    "typescript": "5.7.3"
+  }
+}

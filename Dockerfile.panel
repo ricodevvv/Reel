@@ -1,0 +1,29 @@
+FROM docker.io/library/node:22-alpine AS deps
+WORKDIR /app
+COPY panel/package.json panel/package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+
+FROM docker.io/library/node:22-alpine AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY panel .
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM docker.io/library/node:22-alpine
+WORKDIR /app
+
+RUN addgroup -g 10006 reel && adduser -S -u 10006 -G reel reel
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3200
+ENV HOSTNAME=0.0.0.0
+
+COPY --from=build --chown=reel:reel /app/.next/standalone ./
+COPY --from=build --chown=reel:reel /app/.next/static ./.next/static
+
+USER reel
+EXPOSE 3200
+
+CMD ["node", "server.js"]

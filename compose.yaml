@@ -1,0 +1,72 @@
+# Euronic Reel: a download panel and the service behind it.
+#
+#   ./deploy.sh
+#
+# writes .env and brings this up. Everything below reads from that file, and every value has a
+# default except the two secrets, which deploy.sh generates.
+
+name: euronic-reel
+
+x-defaults: &defaults
+  restart: unless-stopped
+  networks: [reel]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  worker:
+    <<: *defaults
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: euronic/reel-worker:local
+    environment:
+      REEL_DATA_ROOT: ${REEL_DATA_ROOT:?set REEL_DATA_ROOT in .env}
+      REEL_PASSWORD_HASH: ${REEL_PASSWORD_HASH:?run ./deploy.sh to generate one}
+      REEL_SESSION_SECRET: ${REEL_SESSION_SECRET:?run ./deploy.sh to generate one}
+      REEL_API_TOKEN: ${REEL_API_TOKEN:-}
+      REEL_FETCHER_IMAGE: ${REEL_FETCHER_IMAGE:-euronic/reel-fetcher:local}
+      REEL_MAX_CONCURRENT_JOBS: ${REEL_MAX_CONCURRENT_JOBS:-2}
+      REEL_JOB_TIMEOUT_SECONDS: ${REEL_JOB_TIMEOUT_SECONDS:-3600}
+      REEL_JOB_MEMORY: ${REEL_JOB_MEMORY:-1g}
+      REEL_MAX_ITEMS: ${REEL_MAX_ITEMS:-50}
+      REEL_JOB_RETENTION: ${REEL_JOB_RETENTION:-50}
+
+      # Read a public playlist's track list. Metadata only; see worker/src/spotify.ts.
+      REEL_SPOTIFY_CLIENT_ID: ${REEL_SPOTIFY_CLIENT_ID:-}
+      REEL_SPOTIFY_CLIENT_SECRET: ${REEL_SPOTIFY_CLIENT_SECRET:-}
+    volumes:
+      # The daemon that runs the fetcher containers. Handing this over is equivalent to handing over
+      # root on the host, which is why nothing but the worker is on this side of the network and why
+      # the panel is the only thing that can talk to it.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mounted at the same path it has on the host, because the worker passes these paths back to
+      # the host's daemon as bind mounts for each fetcher container. See config.dataRoot.
+      - ${REEL_DATA_ROOT}:${REEL_DATA_ROOT}
+
+  panel:
+    <<: *defaults
+    build:
+      context: .
+      dockerfile: Dockerfile.panel
+    image: euronic/reel-panel:local
+    depends_on:
+      worker: { condition: service_healthy }
+    environment:
+      REEL_WORKER_URL: http://worker:8500
+    ports:
+      # Bound to every interface when there is no domain, because the point is to reach it from a
+      # laptop that is not the VPS. `deploy.sh domain` sets REEL_BIND=127.0.0.1 once nginx is in
+      # front, and from then on only nginx can reach this.
+      - "${REEL_BIND:-0.0.0.0}:${REEL_HTTP_PORT:-3200}:3200"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+networks:
+  reel:

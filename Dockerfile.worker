@@ -1,0 +1,32 @@
+# The download service. It does not run Docker itself: it talks to the host's daemon over the
+# socket mounted at /var/run/docker.sock, so all it needs is the client — plus zip, for bundling a
+# playlist into one file.
+FROM docker.io/library/node:22-alpine AS build
+WORKDIR /app
+COPY worker/package.json worker/package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+COPY worker/tsconfig.json ./
+COPY worker/src ./src
+RUN npm run build
+
+FROM docker.io/library/node:22-alpine
+WORKDIR /app
+
+RUN apk add --no-cache docker-cli zip ca-certificates
+
+ENV NODE_ENV=production
+
+# No production dependencies at all, so there is nothing to install here: the whole service is the
+# Node standard library plus the compiled output.
+COPY --from=build /app/dist ./dist
+COPY worker/package.json ./
+
+# Runs as root, deliberately. The Docker socket is owned by root:docker on the host and the group
+# id differs between distributions, so matching it inside the image is guesswork that fails
+# silently. The container has no network exposure of its own and holds one credential.
+EXPOSE 8500
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD wget -q -O- http://127.0.0.1:8500/health || exit 1
+
+CMD ["node", "dist/main.js"]
