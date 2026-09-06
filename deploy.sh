@@ -229,6 +229,30 @@ obtain_certificate() {
   return 1
 }
 
+# ---- who has the port ---------------------------------------------------------------------------
+
+# What is listening on a TCP port, named as usefully as this host can name it.
+#
+# A published container port is the likely answer on a machine that already runs something, and it
+# is also the one `ss` describes least helpfully — it shows docker-proxy, or nothing at all when the
+# daemon publishes without one — so Docker gets asked first.
+port_owner() {
+  local port="$1" container process
+
+  container="$(as_root docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null | grep -F ":$port->" | cut -f1 | head -1 || true)"
+  if [[ -n "$container" ]]; then
+    printf 'the container %s' "$container"
+    return 0
+  fi
+
+  process="$(as_root ss -lptnH "sport = :$port" 2>/dev/null | grep -oE 'users:\(\("[^"]+"' | head -1 | sed 's/.*"\(.*\)"/\1/' || true)"
+  if [[ -n "$process" ]]; then
+    printf '%s' "$process"
+    return 0
+  fi
+  return 1
+}
+
 # ---- images and secrets --------------------------------------------------------------------------
 
 # Built before the env file is written, because hashing the password is a job for the same scrypt
@@ -283,11 +307,38 @@ ENV
 
 # ---- commands --------------------------------------------------------------------------------
 
+# nginx needs 80 to answer the ACME challenge and 443 to serve. Something else holding either one
+# is the common case on a host that already runs a panel, and installing nginx on top of it only
+# produces a bind error several steps later. Naming the occupant here is the whole point.
+refuse_if_port_taken() {
+  local port occupant
+  for port in 80 443; do
+    occupant="$(port_owner "$port")" || continue
+    # nginx already being there is fine: a second site is another server block, not a second daemon.
+    [[ "$occupant" == "nginx" ]] && continue
+
+    err "port $port is already taken by $occupant."
+    cat >&2 <<GUIDANCE
+
+  Two things want to terminate TLS on this host and only one can have the port. Either:
+
+    - Put Reel behind whatever is already there. The panel is on port $(env_get REEL_HTTP_PORT || echo 3200);
+      point that proxy at 127.0.0.1 on it and skip this command. Then set REEL_BIND=127.0.0.1
+      in .env and run ./deploy.sh update, so the port stops being open to the world.
+
+    - Or free $port first, and run this again.
+
+GUIDANCE
+    die "nothing was changed."
+  done
+}
+
 setup_domain() {
   local domain="$1" email="${2:-}"
   [[ -n "$domain" ]] || die "a domain is required: ./deploy.sh domain reel.example.com [you@example.com]"
   [[ -f "$ENV_FILE" ]] || die "no $ENV_FILE yet. Run ./deploy.sh first."
 
+  refuse_if_port_taken
   command -v nginx >/dev/null 2>&1 || install_packages nginx
   # The nginx plugin is a package of its own everywhere, and `certbot --nginx` is inert without it.
   command -v certbot >/dev/null 2>&1 || install_packages certbot python3-certbot-nginx
@@ -367,6 +418,17 @@ up() {
     write_env "$password" "$data_root" \
       "$([[ -n "$DOMAIN" ]] && echo 127.0.0.1 || echo 0.0.0.0)" \
       "$DOMAIN"
+  fi
+
+  # The panel publishes a host port, and a compose failure to bind one says little about who has
+  # it. A run of this on a machine that already hosts something is exactly when that matters.
+  local port occupant
+  port="$(env_get REEL_HTTP_PORT)"; port="${port:-3200}"
+  if occupant="$(port_owner "$port")"; then
+    case "$occupant" in
+      *euronic-reel*) ;;  # this panel from a previous run; compose replaces it in place
+      *) die "port $port is already taken by $occupant. Set REEL_HTTP_PORT in .env to a free one, then run this again." ;;
+    esac
   fi
 
   log "data directory $data_root"
